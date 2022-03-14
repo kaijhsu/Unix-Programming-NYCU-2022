@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <fstream>
 #include <pwd.h>
+#include <sys/stat.h>
 
 using namespace std;
 
@@ -75,6 +76,53 @@ public:
         return name;
     }
 
+    //pid_path: /proc/4880, name is to get symbol link name
+    //return inode number if success, else -1 indicate that permission deny
+    int get_cwd(const string &pid_path, string &name, string &type){
+        string path = pid_path+"/cwd";
+        struct stat buf;
+
+        int flag = stat(path.c_str(), &buf);
+        if(flag != 0){
+            name = path + " (Permission denied)";
+            type = "unknown";
+            return -1;
+        }
+        name = filesystem::read_symlink(path);
+        type = get_type(buf);
+        return buf.st_ino;
+    }
+
+    int get_root(const string &pid_path, string &name, string &type){
+        string path = pid_path+"/root";
+        struct stat buf;
+
+        int flag = stat(path.c_str(), &buf);
+        if(flag != 0){
+            name = path + " (Permission denied)";
+            type = "unknown";
+            return -1;
+        }
+        name = filesystem::read_symlink(path);
+        type = get_type(buf);
+        return buf.st_ino;
+    }
+
+    int get_exe(const string &pid_path, string &name, string &type){
+        string path = pid_path+"/exe";
+        struct stat buf;
+
+        int flag = stat(path.c_str(), &buf);
+        if(flag != 0){
+            name = path + " (Permission denied)";
+            type = "unknown";
+            return -1;
+        }
+        name = filesystem::read_symlink(path);
+        type = get_type(buf);
+        return buf.st_ino;
+    }
+
     bool get_pids(){
         string procPath = "/proc";
         regex reg("/proc/([0-9]*)");
@@ -94,6 +142,9 @@ public:
         find_cmd_test();
         uid_to_name_test();
         find_name_test();
+        get_cwd_test();
+        get_root_test();
+        get_exe_test();
         cout << "---- All test end  ----\n";
     }
 
@@ -126,14 +177,62 @@ public:
 
     void find_name_test(){
         cout << "    find_name_test:\n";
-        vector<string> path({"/proc/1","/proc/2","/proc/7103"});
+        vector<string> path({"/proc/1","/proc/2"});
         for(int i=0; i<int(path.size()); ++i){
             string result = find_name(path[i]);
             printf("        input: %s, result: %s\n", path[i].c_str(), result.c_str());
         }
     }
     
+    void get_cwd_test(){
+        cout << "    get_cwd_test:\n";
+        vector<string> path({"/proc/1","/proc/2","/proc/4880"});
+        for(int i=0; i<int(path.size()); ++i){
+            string name;
+            string type;
+            int inode = get_cwd(path[i], name, type);
+            printf("        input: %s, inode: %d, name:%s, type:%s\n", path[i].c_str(), inode, name.c_str(), type.c_str());
+        }
+    }
+
+    void get_root_test(){
+        cout << "    get_root_test:\n";
+        vector<string> path({"/proc/1","/proc/2","/proc/4880"});
+        for(int i=0; i<int(path.size()); ++i){
+            string name;
+            string type;
+            int inode = get_root(path[i], name, type);
+            printf("        input: %s, inode: %d, name:%s, type:%s\n", path[i].c_str(), inode, name.c_str(), type.c_str());
+        }
+    }
+
+    void get_exe_test(){
+        cout << "    get_exe_test:\n";
+        vector<string> path({"/proc/1","/proc/2","/proc/4880"});
+        for(int i=0; i<int(path.size()); ++i){
+            string name;
+            string type;
+            int inode = get_exe(path[i], name, type);
+            printf("        input: %s, inode: %d, name:%s, type:%s\n", path[i].c_str(), inode, name.c_str(), type.c_str());
+        }
+    }
+
 private:
+    string get_type(struct stat &buf){
+        if(S_ISDIR(buf.st_mode))
+            return "DIR";
+        if(S_ISREG(buf.st_mode))
+            return "REG";
+        if(S_ISCHR(buf.st_mode))
+            return "CHR";
+        if(S_ISFIFO(buf.st_mode))
+            return "FIFO";
+        if(S_ISSOCK(buf.st_mode))
+            return "SOCK";
+        return "unknown";
+            
+    }
+
     vector<string> pid_paths;
     vector<Process> processes;
 };
