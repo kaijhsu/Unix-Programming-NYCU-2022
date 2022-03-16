@@ -149,7 +149,7 @@ public:
         return 0;
     }
 
-    int get_fd(const string &pid_path){
+    int get_fd(const string &pid_path, vector<string> &fds, vector<string> &types, vector<string> &nodes, vector<string> &names){
         string path = pid_path + "/fd";
         filesystem::directory_iterator directory;
         try{
@@ -163,17 +163,41 @@ public:
                 continue;
             if(!entry.exists()){
                 cout << "entry not exist!\n";
+                continue;
             }
             struct stat st;
-            if( lstat(entry.path().c_str(), &st) == -1){
-                cout << entry.path() << " lstat fail!\n";
+            struct stat lst;
+            if( stat(entry.path().c_str(), &st) == -1){
+                cout << entry.path() << " stat fail!\n";
+                continue;
             };
-            ino_t node = st.st_ino;
-            auto mode = st.st_mode;
-            printf("\t\t node: %d, mode: %lo\n",node , st.st_mode);            
-            
-            
+            if( lstat(entry.path().c_str(), &lst) == -1){
+                cout << entry.path() << " lstat fail!\n";
+                continue;
+            };
+
+            string name = filesystem::read_symlink(entry.path());
+            string type = get_type(st);
+            string node = to_string(st.st_ino);         
+
+            regex reg("\/proc\/[0-9]+\/fd\/([0-9]+)");
+            smatch m;
+            string pathName(entry.path().c_str());
+            regex_search(pathName, m, reg);
+            string fd = m[1];
+            if(lst.st_mode & S_IRUSR and lst.st_mode & S_IWUSR)
+                fd += "u";
+            else if(lst.st_mode & S_IWUSR)
+                fd += "w";
+            else if(lst.st_mode & S_IRUSR)
+                fd += "r";
+
+            names.push_back(name);
+            types.push_back(type);
+            nodes.push_back(node);
+            fds.push_back(fd);
         }
+        return 0;
     }
 
     bool get_pids(){
@@ -191,14 +215,14 @@ public:
 
     void run_test(){
         cout << "---- Testing Start ----\n";
-        // find_pid_test();
-        // find_cmd_test();
-        // uid_to_name_test();
-        // find_name_test();
-        // get_cwd_test();
-        // get_root_test();
-        // get_exe_test();
-        // get_maps_test();
+        find_pid_test();
+        find_cmd_test();
+        uid_to_name_test();
+        find_name_test();
+        get_cwd_test();
+        get_root_test();
+        get_exe_test();
+        get_maps_test();
         get_fd_test();
         cout << "---- All test end  ----\n";
     }
@@ -288,10 +312,13 @@ public:
 
     void get_fd_test(){
         cout << "    get_fd_test:\n";
-        vector<string> path({"/proc/1", "/proc/6331"});
+        vector<string> path({"/proc/1", "/proc/29254"});
         for(int i=0; i<int(path.size()); ++i){
+            vector<string> fds, types, nodes, names;
             printf("        input: %s\n", path[i].c_str());
-            get_fd(path[i]);
+            get_fd(path[i],fds,types,nodes,names);
+            for(size_t j=0; j<fds.size(); ++j)
+                printf("            fd: %s, type: %s, node: %s, name: %s\n", fds[j].c_str(), types[j].c_str(), nodes[j].c_str(), names[j].c_str());
         }
     }
 
