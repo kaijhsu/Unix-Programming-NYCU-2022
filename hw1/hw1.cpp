@@ -6,6 +6,7 @@
 #include <fstream>
 #include <pwd.h>
 #include <sys/stat.h>
+#include <set>
 
 using namespace std;
 
@@ -123,6 +124,58 @@ public:
         return buf.st_ino;
     }
 
+    int get_maps(const string &pid_path, vector<string> &inodes, vector<string> &fileNames){
+        string path = pid_path + "/maps";
+        ifstream file(path);
+        if(!file)
+            return -1;
+        string line;
+        regex reg("[0-9a-zA-Z-]+ [rwxps-]+ [0-9a-zA-Z]+ [0-9:]+ ([0-9]+)[ \t]+([^ ]+)");
+        smatch m;
+        set<string> mySet;
+        while( getline(file, line) ){
+            if( regex_search(line, m, reg) ){
+                string inode = m[1];
+                string name = m[2];
+                if(inode == "0")
+                    continue;
+                if(mySet.count(inode))
+                    continue;
+                mySet.insert(inode);
+                inodes.push_back(inode);
+                fileNames.push_back(name);
+            }
+        }
+        return 0;
+    }
+
+    int get_fd(const string &pid_path){
+        string path = pid_path + "/fd";
+        filesystem::directory_iterator directory;
+        try{
+            directory = filesystem::directory_iterator(path);
+        }
+        catch(filesystem::filesystem_error &e){
+            return -1;
+        }
+        for(const auto &entry : directory){
+            if(!entry.is_symlink())
+                continue;
+            if(!entry.exists()){
+                cout << "entry not exist!\n";
+            }
+            struct stat st;
+            if( lstat(entry.path().c_str(), &st) == -1){
+                cout << entry.path() << " lstat fail!\n";
+            };
+            ino_t node = st.st_ino;
+            auto mode = st.st_mode;
+            printf("\t\t node: %d, mode: %lo\n",node , st.st_mode);            
+            
+            
+        }
+    }
+
     bool get_pids(){
         string procPath = "/proc";
         regex reg("/proc/([0-9]*)");
@@ -138,13 +191,15 @@ public:
 
     void run_test(){
         cout << "---- Testing Start ----\n";
-        find_pid_test();
-        find_cmd_test();
-        uid_to_name_test();
-        find_name_test();
-        get_cwd_test();
-        get_root_test();
-        get_exe_test();
+        // find_pid_test();
+        // find_cmd_test();
+        // uid_to_name_test();
+        // find_name_test();
+        // get_cwd_test();
+        // get_root_test();
+        // get_exe_test();
+        // get_maps_test();
+        get_fd_test();
         cout << "---- All test end  ----\n";
     }
 
@@ -186,7 +241,7 @@ public:
     
     void get_cwd_test(){
         cout << "    get_cwd_test:\n";
-        vector<string> path({"/proc/1","/proc/2","/proc/4880"});
+        vector<string> path({"/proc/1","/proc/2"});
         for(int i=0; i<int(path.size()); ++i){
             string name;
             string type;
@@ -197,7 +252,7 @@ public:
 
     void get_root_test(){
         cout << "    get_root_test:\n";
-        vector<string> path({"/proc/1","/proc/2","/proc/4880"});
+        vector<string> path({"/proc/1","/proc/2"});
         for(int i=0; i<int(path.size()); ++i){
             string name;
             string type;
@@ -208,12 +263,35 @@ public:
 
     void get_exe_test(){
         cout << "    get_exe_test:\n";
-        vector<string> path({"/proc/1","/proc/2","/proc/4880"});
+        vector<string> path({"/proc/1","/proc/2"});
         for(int i=0; i<int(path.size()); ++i){
             string name;
             string type;
             int inode = get_exe(path[i], name, type);
             printf("        input: %s, inode: %d, name:%s, type:%s\n", path[i].c_str(), inode, name.c_str(), type.c_str());
+        }
+    }
+
+    void get_maps_test(){
+        cout << "    get_maps_test:\n";
+        vector<string> path({"/proc/1", "/proc/6331"});
+        for(int i=0; i<int(path.size()); ++i){
+            vector<string> inodes;
+            vector<string> fileNames;
+            get_maps(path[i], inodes, fileNames);
+            printf("        input: %s\n", path[i].c_str());
+            for(__SIZE_TYPE__ j=0; j<inodes.size(); ++j){
+                printf("            inode: %s, file: %s\n", inodes[j].c_str(), fileNames[j].c_str());
+            }
+        }
+    }
+
+    void get_fd_test(){
+        cout << "    get_fd_test:\n";
+        vector<string> path({"/proc/1", "/proc/6331"});
+        for(int i=0; i<int(path.size()); ++i){
+            printf("        input: %s\n", path[i].c_str());
+            get_fd(path[i]);
         }
     }
 
