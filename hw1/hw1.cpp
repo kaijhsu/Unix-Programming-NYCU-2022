@@ -7,18 +7,10 @@
 #include <pwd.h>
 #include <sys/stat.h>
 #include <set>
+#include <unistd.h>
 
 using namespace std;
 
-struct Process{
-    string pid;
-    string cmd;
-    string usr;
-    string fd;
-    string type;
-    string node;
-    string name;
-};
 
 class Lsof{
 public:
@@ -27,13 +19,73 @@ public:
     }
 
     void run(){
+        printf("COMMAND\t\t\tPID\t\t\tUSER\t\t\tFD\t\t\tTYPE\t\t\tNODE\t\t\tNAME\n");
 
+        get_pids();
+        string line_format = "%s\t\t\t%s\t\t\t%s\t\t\t%s\t\t\t%s\t\t\t%s\t\t\t%s\n";
+        for(auto &pid_path : pid_paths){
+            string command = find_cmd(pid_path);
+            if(command == "")
+                continue;
+            if( cmd_reg  != ""){
+                regex reg(cmd_reg);
+                smatch m;
+                if(!regex_search(command, m, reg))
+                    continue;
+            }
+            string pid = find_pid(pid_path);
+            string user = find_user(pid_path);
+            string name="", type="";
+            
+            //print cwd
+            string inode = to_string(get_cwd(pid_path, name, type));
+            if(inode == "-1") inode = "";
+            string cmd_fd = "cwd";
+            filter_print(line_format, command, pid, user, cmd_fd, type, inode, name);
+            
+            //print root
+            inode = to_string(get_root(pid_path, name, type));
+            if(inode == "-1") inode = "";
+            string root_fd = "rtd";
+            filter_print(line_format, command, pid, user, root_fd, type, inode, name);
+
+            //print exe
+            inode = to_string(get_exe(pid_path, name, type));
+            if(inode == "-1") inode = "";
+            string exe_fd = "txt";
+            filter_print(line_format, command, pid, user, exe_fd, type, inode, name);
+
+            //get fd
+            vector<string> fd_fds, fd_types, fd_nodes, fd_names;
+            int fd_flag = get_fd(pid_path, fd_fds, fd_types, fd_nodes, fd_names);
+            if(fd_flag == 0){
+                vector<string> maps_fds, maps_inodes, maps_names;
+                get_maps(pid_path, maps_fds, maps_inodes, maps_names);
+                string fd_type = "REG";
+                for(size_t i=0; i<maps_inodes.size(); ++i)
+                    filter_print(line_format, command, pid, user, maps_fds[i], fd_type, maps_inodes[i], maps_names[i]);
+            }
+
+            //print fd
+            for(size_t i=0; i<fd_fds.size(); ++i)
+                filter_print(line_format, command, pid, user, fd_fds[i], fd_types[i], fd_nodes[i], fd_names[i]);
+        }
+    }
+
+    bool set_reg(const string &cmd_reg, const string &type_reg, const string &file_reg){
+        set<string> valid_types {"REG", "CHR", "DIR", "FIFO", "SOCK", "unknown", ""};
+        if(!valid_types.count(type_reg))
+            return false;
+        this->cmd_reg = cmd_reg;
+        this->type_reg = type_reg;
+        this->file_reg = file_reg;
+        return true;
     }
 
     string find_cmd(const string &pid_path){
         string path = pid_path+"/comm";
         ifstream file(path);
-        string cmd;
+        string cmd = "";
         getline (file, cmd);
         file.close();
         return cmd;
@@ -46,7 +98,7 @@ public:
         return m[1];
     }
 
-    string find_name(const string &pid_path){
+    string find_user(const string &pid_path){
         string path = pid_path+"/status";
         ifstream file(path);
         string line;
@@ -124,14 +176,17 @@ public:
         return buf.st_ino;
     }
 
-    int get_maps(const string &pid_path, vector<string> &inodes, vector<string> &fileNames){
+    int get_maps(const string &pid_path, vector<string> &fds, vector<string> &inodes, vector<string> &fileNames){
         string path = pid_path + "/maps";
         ifstream file(path);
         if(!file)
             return -1;
         string line;
-        regex reg("[0-9a-zA-Z-]+ [rwxps-]+ [0-9a-zA-Z]+ [0-9:]+ ([0-9]+)[ \t]+([^ ]+)");
+        regex reg("[0-9a-zA-Z-]+ [rwxps-]+ [0-9a-zA-Z]+ [0-9:A-z]+ ([0-9]+)[ \t]+([^ ]+)");
         smatch m;
+        regex del_reg("deleted");
+        smatch del_m;
+
         set<string> mySet;
         while( getline(file, line) ){
             if( regex_search(line, m, reg) ){
@@ -141,6 +196,11 @@ public:
                     continue;
                 if(mySet.count(inode))
                     continue;
+                int del_flag = regex_search(line, del_m, del_reg);
+                if(del_flag)
+                    fds.push_back("DEL");
+                else
+                    fds.push_back("mem");
                 mySet.insert(inode);
                 inodes.push_back(inode);
                 fileNames.push_back(name);
@@ -156,6 +216,10 @@ public:
             directory = filesystem::directory_iterator(path);
         }
         catch(filesystem::filesystem_error &e){
+            fds.push_back("NOFD");
+            types.push_back("");
+            nodes.push_back("");
+            names.push_back(path+" (Permission denied)");
             return -1;
         }
         for(const auto &entry : directory){
@@ -202,7 +266,7 @@ public:
 
     bool get_pids(){
         string procPath = "/proc";
-        regex reg("/proc/([0-9]*)");
+        regex reg("[0-9]+");
         smatch m;
         for (const auto & entry : filesystem::directory_iterator(procPath)){
             string path = entry.path();
@@ -218,7 +282,7 @@ public:
         find_pid_test();
         find_cmd_test();
         uid_to_name_test();
-        find_name_test();
+        find_user_test();
         get_cwd_test();
         get_root_test();
         get_exe_test();
@@ -254,11 +318,11 @@ public:
         }
     }
 
-    void find_name_test(){
-        cout << "    find_name_test:\n";
+    void find_user_test(){
+        cout << "    find_user_test:\n";
         vector<string> path({"/proc/1","/proc/2"});
         for(int i=0; i<int(path.size()); ++i){
-            string result = find_name(path[i]);
+            string result = find_user(path[i]);
             printf("        input: %s, result: %s\n", path[i].c_str(), result.c_str());
         }
     }
@@ -298,14 +362,15 @@ public:
 
     void get_maps_test(){
         cout << "    get_maps_test:\n";
-        vector<string> path({"/proc/1", "/proc/6331"});
+        vector<string> path({"/proc/1", "/proc/12199"});
         for(int i=0; i<int(path.size()); ++i){
             vector<string> inodes;
             vector<string> fileNames;
-            get_maps(path[i], inodes, fileNames);
+            vector<string> fds;
+            get_maps(path[i], fds, inodes, fileNames);
             printf("        input: %s\n", path[i].c_str());
             for(__SIZE_TYPE__ j=0; j<inodes.size(); ++j){
-                printf("            inode: %s, file: %s\n", inodes[j].c_str(), fileNames[j].c_str());
+                printf("            fds: %s, inode: %s, file: %s\n", fds[j].c_str(), inodes[j].c_str(), fileNames[j].c_str());
             }
         }
     }
@@ -335,16 +400,62 @@ private:
         if(S_ISSOCK(buf.st_mode))
             return "SOCK";
         return "unknown";
-            
+    }
+
+    int filter_print(string &format, string &cmd, string &pid, string &user, string &fd, string &type, string &inode, string &name){
+        if(type_reg != ""){
+            if(type != type_reg)
+                return 0;
+        }
+        if(file_reg != ""){
+            regex reg(file_reg);
+            smatch m;
+            if( regex_search(name, m, reg) == 0)
+                return 0;
+        }
+        printf(format.c_str(), cmd.c_str(), pid.c_str(), user.c_str(), fd.c_str(), type.c_str(), inode.c_str(), name.c_str());
+        return 1;
     }
 
     vector<string> pid_paths;
-    vector<Process> processes;
+    string cmd_reg = "";
+    string type_reg = "";
+    string file_reg = "";
 };
 
 
 int main(int argc, char *argv[]){
+    //parse argument
+    string cmd_reg = "";
+    string type_reg = "";
+    string file_reg = "";
+    int o;
+    while( (o = getopt(argc, argv, "c:t:f:")) != -1 ){
+        switch (o) {
+            case 'c':
+                cmd_reg = optarg;
+                break;
+            case 't':
+                type_reg = optarg;
+                break;
+            case 'f':
+                file_reg = optarg;
+                break;
+            case '?':
+                exit(-1);
+                return -1;
+                break;
+            default:
+                break;
+        }
+    }
     Lsof lsof;
-    lsof.run_test();
+    if( lsof.set_reg(cmd_reg, type_reg, file_reg) == false ){
+        cerr << "Invalid TYPE option.\n";
+        exit(-1);
+    }
+    // lsof.run_test();
+    lsof.run();
+
     return 0;
 }
