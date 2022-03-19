@@ -62,7 +62,7 @@ public:
                 vector<string> maps_fds, maps_inodes, maps_names;
                 get_maps(pid_path, maps_fds, maps_inodes, maps_names);
                 string fd_type = "REG";
-                for(size_t i=0; i<maps_inodes.size(); ++i)
+                for(size_t i=1; i<maps_inodes.size(); ++i)
                     filter_print(line_format, command, pid, user, maps_fds[i], fd_type, maps_inodes[i], maps_names[i]);
             }
 
@@ -241,6 +241,11 @@ public:
             };
 
             string name = filesystem::read_symlink(entry.path());
+            regex del_reg("([^ ]*)");
+            smatch del_m;
+            regex_search(name, del_m, del_reg);
+            name = del_m[1];
+
             string type = get_type(st);
             string node = to_string(st.st_ino);         
 
