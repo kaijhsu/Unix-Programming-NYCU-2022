@@ -106,10 +106,10 @@ FILE * fopen(const char *pathname, const char *mode){
     static FILE *(*_fopen)(const char *, const char *);
     _fopen = _load_function(_fopen, "fopen");
     
-    char path[PATH_MAX];
-    realpath(pathname, path);
 
     FILE * ret = _fopen(pathname, mode);
+    char path[PATH_MAX];
+    realpath(pathname, path);
     fprintf(stderr, "[logger] fopen(\"%s\", \"%s\") = %p\n", path, mode, ret);
     
     return ret;
