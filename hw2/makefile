@@ -1,6 +1,7 @@
 
-all: hw2.so
-	chmod +x hw2.so
+all: logger.so
+	chmod +x logger 
+	chmod +x logger.so
 
-hw2.so: hw2.c
-	gcc -o hw2.so -shared -fPIC hw2.c -ldl
+logger.so: hw2.c
+	gcc -o logger.so -shared -fPIC hw2.c -ldl

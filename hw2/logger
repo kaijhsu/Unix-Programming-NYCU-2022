@@ -1,0 +1,70 @@
+#!/bin/bash
+
+path="./logger.so"
+output_file=""
+cmd=""
+
+function help {
+    echo "usage: ./logger [-o file] [-p sopath] [--] cmd [cmd args ...]"
+    echo "    -p: set the path to logger.so, default = ./logger.so"
+    echo "    -o: print output to file, print to \"stderr\" if no file specified"
+    echo "    --: separate the arguments for logger and for the command"
+    exit -1
+}
+
+function parse_args {
+    double_dash_flag=0
+    while [[ $# -gt 0 ]]; do
+        if [ $double_dash_flag -eq 1 ]; then
+            cmd="$cmd $1"
+            shift
+            continue
+        fi
+        case $1 in 
+            -p)
+                if [ $# -lt 2 ]; then
+                    help
+                fi
+                path="$2"
+                shift
+                shift
+                ;;
+            -o)
+                if [ $# -lt 2 ]; then
+                    help
+                fi
+                output_file="$2"
+                shift
+                shift
+                ;;
+            --)
+                double_dash_flag=1
+                shift
+                ;;
+            -*)
+                opt="$1"
+                echo "./logger: invalid option -- '${opt#-}'"
+                help
+                ;;
+            *)
+                cmd="$1"
+                break
+                ;;      
+        esac
+    done
+}
+
+parse_args $@
+
+if [ "$cmd" == "" ]; then 
+    echo "no command given."
+    exit -1
+fi
+
+cmd="LD_PRELOAD=$path $cmd"
+
+if [ "$output_file" != "" ]; then
+    cmd="$cmd 2> $output_file"
+fi
+
+eval $cmd
