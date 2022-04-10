@@ -5,8 +5,18 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <stdarg.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
+static int _stderr_fd = -1;
+static FILE * _stderr;
 
 void* _load_function(void *fPtr, const char *name){
+    if(_stderr_fd == -1){
+        _stderr_fd = dup(STDERR_FILENO);
+        _stderr = fdopen(_stderr_fd, "w");
+    }
     if(fPtr != NULL)
         return fPtr;
 
@@ -15,6 +25,7 @@ void* _load_function(void *fPtr, const char *name){
         if(handle != NULL)
             return dlsym(handle, name);
     }
+    return NULL;
 }
 
 
@@ -50,7 +61,7 @@ int chmod(const char *pathname, mode_t mode){
     realpath(pathname, path);
 
     int ret = _chmod(pathname, mode);
-    fprintf(stderr, "[logger] chmod(\"%s\", %o) = %d\n", path, mode, ret);
+    fprintf(_stderr, "[logger] chmod(\"%s\", %o) = %d\n", path, mode, ret);
     return ret;
 }
 
@@ -62,7 +73,7 @@ int chown(const char *pathname, uid_t owner, gid_t group){
     realpath(pathname, path);
 
     int ret = _chown(pathname, owner, group);
-    fprintf(stderr, "[logger] chown(\"%s\", %d, %d) = %d\n", path, owner, group, ret);
+    fprintf(_stderr, "[logger] chown(\"%s\", %d, %d) = %d\n", path, owner, group, ret);
     return ret;
 }
 
@@ -74,7 +85,7 @@ int close(int fd){
     _convert_fd(fd, path);
 
     int ret = _close(fd);
-    fprintf(stderr, "[logger] close(\"%s\") = %d\n", path, ret);
+    fprintf(_stderr, "[logger] close(\"%s\") = %d\n", path, ret);
     return ret;
 }
 
@@ -86,7 +97,19 @@ int creat(const char *pathname, mode_t mode){
     realpath(pathname, path);
 
     int ret = _creat(pathname, mode);
-    fprintf(stderr, "[logger] creat(\"%s\", %o) = %d\n", path, mode, ret);
+    fprintf(_stderr, "[logger] creat(\"%s\", %o) = %d\n", path, mode, ret);
+    return ret;
+}
+
+int creat64(const char *pathname, mode_t mode){
+    static int (*_creat64)(const char *, mode_t);
+    _creat64 = _load_function(_creat64, "creat64");
+
+    char path[PATH_MAX];
+    realpath(pathname, path);
+
+    int ret = _creat64(pathname, mode);
+    fprintf(_stderr, "[logger] creat(\"%s\", %o) = %d\n", path, mode, ret);
     return ret;
 }
 
@@ -98,7 +121,7 @@ int fclose(FILE *stream){
     _convert_FILEPtr(stream, path);
     
     int ret =  _fclose(stream); 
-    fprintf(stderr, "[logger] fclose(\"%s\") = %d\n", path, ret);
+    fprintf(_stderr, "[logger] fclose(\"%s\") = %d\n", path, ret);
     return ret;    
 }
 
@@ -110,7 +133,20 @@ FILE * fopen(const char *pathname, const char *mode){
     FILE * ret = _fopen(pathname, mode);
     char path[PATH_MAX];
     realpath(pathname, path);
-    fprintf(stderr, "[logger] fopen(\"%s\", \"%s\") = %p\n", path, mode, ret);
+    fprintf(_stderr, "[logger] fopen(\"%s\", \"%s\") = %p\n", path, mode, ret);
+    
+    return ret;
+}
+
+FILE * fopen64(const char *pathname, const char *mode){
+    static FILE *(*_fopen64)(const char *, const char *);
+    _fopen64 = _load_function(_fopen64, "fopen64");
+    
+
+    FILE * ret = _fopen64(pathname, mode);
+    char path[PATH_MAX];
+    realpath(pathname, path);
+    fprintf(_stderr, "[logger] fopen(\"%s\", \"%s\") = %p\n", path, mode, ret);
     
     return ret;
 }
@@ -125,7 +161,7 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream){
     _convert_FILEPtr(stream, path);
 
     size_t ret = _fread(ptr, size, nmemb, stream);
-    fprintf(stderr, "[logger] fread(\"%s\", %ld, %ld, \"%s\") = %ld\n", char_buf, size, nmemb, path, ret);
+    fprintf(_stderr, "[logger] fread(\"%s\", %ld, %ld, \"%s\") = %ld\n", char_buf, size, nmemb, path, ret);
 
     return ret;
 }
@@ -141,19 +177,49 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream){
 
 
     size_t ret = _fwrite(ptr, size, nmemb, stream);
-    fprintf(stderr, "[logger] fwrite(\"%s\", %ld, %ld, \"%s\") = %ld\n", char_buf, size, nmemb, path, ret);
+    fprintf(_stderr, "[logger] fwrite(\"%s\", %ld, %ld, \"%s\") = %ld\n", char_buf, size, nmemb, path, ret);
 
     return ret;
 }
 
-int open(const char *pathname, int flags, mode_t mode){
+int open(const char *pathname, int flags, ...){
     static int (*_open)(const char *, int, mode_t);
     _open = _load_function(_open, "open");
+
+    mode_t mode=0;
+    
+    if(flags & O_CREAT || flags & (__O_TMPFILE | O_DIRECTORY) ){
+        va_list input_args;
+        va_start (input_args, flags);
+        mode = va_arg (input_args, mode_t);
+        va_end(input_args);
+    }
 
     int ret = _open(pathname, flags, mode);
     char path[PATH_MAX];
     realpath(pathname, path);
-    fprintf(stderr, "[logger] open(\"%s\", %o, %o) = %d\n", path, flags, mode, ret);
+    fprintf(_stderr, "[logger] open(\"%s\", %o, %o) = %d\n", path, flags, mode, ret);
+    
+    
+    return ret;
+}
+
+int open64(const char *pathname, int flags, ...){
+    static int (*_open64)(const char *, int, mode_t);
+    _open64 = _load_function(_open64, "open64");
+
+    mode_t mode = 0;
+    if(flags & O_CREAT || flags & (__O_TMPFILE | O_DIRECTORY) ){
+        va_list input_args;
+        va_start (input_args, flags);
+        mode = va_arg (input_args, mode_t);
+        va_end(input_args);
+    }
+
+    int ret = _open64(pathname, flags, mode);
+    char path[PATH_MAX];
+    realpath(pathname, path);
+    fprintf(_stderr, "[logger] open(\"%s\", %o, %o) = %d\n", path, flags, mode, ret);
     return ret;
 }
 
@@ -168,7 +234,7 @@ ssize_t read(int fd, void *buf, size_t count){
     _convert_char_buf(buf, char_buf);
 
     ssize_t ret = _read(fd, buf, count);
-    fprintf(stderr, "[logger] read(\"%s\", \"%s\", %ld) = %ld\n", path, char_buf, count, ret);
+    fprintf(_stderr, "[logger] read(\"%s\", \"%s\", %ld) = %ld\n", path, char_buf, count, ret);
     return ret;
 }
 
@@ -180,7 +246,7 @@ int remove(const char *pathname){
     realpath(pathname, path);
 
     int ret = _remove(pathname);
-    fprintf(stderr, "[logger] remove(\"%s\") = %d\n", path, ret);
+    fprintf(_stderr, "[logger] remove(\"%s\") = %d\n", path, ret);
     return ret;
 }
       
@@ -190,10 +256,10 @@ int rename(const char *oldpath, const char *newpath){
 
     char old[PATH_MAX], new[PATH_MAX];
     realpath(oldpath, old);
-    realpath(newpath, new);
 
     int ret = _rename(oldpath, newpath);
-    fprintf(stderr, "[logger] rename(\"%s\", \"%s\") = %d\n", old, new, ret);
+    realpath(newpath, new);
+    fprintf(_stderr, "[logger] rename(\"%s\", \"%s\") = %d\n", old, new, ret);
     return ret;
 }
 
@@ -202,7 +268,16 @@ FILE *tmpfile(){
     _tmpfile = _load_function(_tmpfile, "tmpfile");
 
     FILE *ret = _tmpfile();
-    fprintf(stderr, "[logger] tmpfile() = %p\n", ret);
+    fprintf(_stderr, "[logger] tmpfile() = %p\n", ret);
+    return ret;
+}
+
+FILE *tmpfile64(){
+    static FILE* (*_tmpfile64)();
+    _tmpfile64 = _load_function(_tmpfile64, "tmpfile64");
+
+    FILE *ret = _tmpfile64();
+    fprintf(_stderr, "[logger] tmpfile() = %p\n", ret);
     return ret;
 }
 
@@ -216,7 +291,7 @@ ssize_t write(int fd, const void *buf, size_t count){
     _convert_char_buf(buf, char_buf);
 
     ssize_t ret = _write(fd, buf, count);
-    fprintf(stderr, "[logger] write(\"%s\", \"%s\", %ld) = %ld\n", path, char_buf, count, ret);
+    fprintf(_stderr, "[logger] write(\"%s\", \"%s\", %ld) = %ld\n", path, char_buf, count, ret);
     return ret;
 }
 

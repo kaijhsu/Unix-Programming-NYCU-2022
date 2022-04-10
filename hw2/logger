@@ -3,9 +3,11 @@
 path="./logger.so"
 output_file=""
 cmd=""
+usage_path="$(realpath "$0")"
+
 
 function help {
-    echo "usage: ./logger [-o file] [-p sopath] [--] cmd [cmd args ...]"
+    echo "usage: $usage_path [-o file] [-p sopath] [--] cmd [cmd args ...]"
     echo "    -p: set the path to logger.so, default = ./logger.so"
     echo "    -o: print output to file, print to \"stderr\" if no file specified"
     echo "    --: separate the arguments for logger and for the command"
@@ -53,6 +55,8 @@ function parse_args {
         esac
     done
 }
+
+
 
 parse_args $@
 
