@@ -180,6 +180,105 @@ size_t strlen(const char *s){
     return ret;
 }
 
+long sigaction(int sig, struct sigaction *act, struct sigaction *oldact){
+    act->sa_flags |= SA_RESTORER;
+    act->sa_restorer = __myrt;
+    long ret = sys_rt_sigaction(sig, act, oldact, SIG_NSIG / 8);
+    WRAPPER_RETval(int);
+}
+
+int sigismember(const sigset_t *set, int sig){
+    if(_valid_signo(sig) && _valid_sigset(set)){
+        return (set->val[0] & sigmask(sig)) != 0;
+    }
+    errno = EINVAL;
+    return -1;
+}
+
+int sigaddset (sigset_t *set, int sig){
+    if(_valid_signo(sig) && _valid_sigset(set)){
+        set->val[0] |= sigmask(sig);
+        return 0;
+    }
+    errno = EINVAL;
+    return -1;
+}
+
+int sigdelset (sigset_t *set, int sig){
+    if(_valid_signo(sig) && _valid_sigset(set)){
+        set->val[0] &= ~sigmask(sig);
+        return 0;
+    }
+    errno = EINVAL;
+    return -1;
+}
+
+int sigemptyset(sigset_t *set){
+    if(_valid_sigset(set)){
+        memset(set, 0, sizeof(sigset_t));
+        return 0;
+    }
+    errno = EINVAL;
+    return -1;
+}
+
+int sigfillset(sigset_t *set){
+    if(_valid_sigset(set)){
+        memset(set, 0xff, sizeof(sigset_t));
+        return 0;
+    }
+    errno = EINVAL;
+    return -1;
+}
+
+int sigpending(sigset_t *set){
+    long ret = sys_rt_sigpending(set, SIG_NSIG / 8);
+    WRAPPER_RETval(int);
+}
+
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset){
+    long ret = sys_rt_sigprocmask(how, set, oldset, SIG_NSIG / 8);
+    WRAPPER_RETval(int);
+}
+
+sighandler_t signal(int signo, sighandler_t handler){
+    struct sigaction act, oldact;
+    if(_valid_signo(signo) && handler != SIG_ERR){
+        act.sa_handler = handler;
+        sigemptyset(&act.sa_mask);
+        sigaddset(&act.sa_mask, signo);
+        act.sa_flags = SA_RESTART;
+        if (sigaction(signo, &act, &oldact) < 0)
+            return SIG_ERR;
+        return oldact.sa_handler;
+    }
+    errno = EINVAL;
+    return SIG_ERR;
+    
+}
+
+// return sigmask by sig
+unsigned long long sigmask(int sig){
+    unsigned long long ret = 1;
+    ret = ret << (sig -1);
+    return ret;
+}
+
+int _valid_sigset(const sigset_t *set){
+    // valid if singo != NULL
+    return ((set == NULL)? 0: 1);
+}
+
+int _valid_signo(const int signo){
+    // valid if 0 < signo < SIG_NSIG
+    return ((signo > 0 && signo < SIG_NSIG)? 1: 0);
+}
+
+void *memset(void *s, int val, size_t size) {
+    char *ptr = (char *) s;
+    while(size-- > 0) *ptr++ = val;
+    return s;
+}
 
 /* ^ --- --- homework spec --- --- ^ */
 

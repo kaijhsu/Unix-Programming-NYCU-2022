@@ -52,6 +52,17 @@ extern  errno
         gensys 108, getegid
 
         gensys  37, alarm
+        gensys  13, rt_sigaction
+    	gensys  14, rt_sigprocmask
+	    gensys 127, rt_sigpending
+
+
+
+        global __myrt:function
+__myrt:
+        mov rax, 15
+        syscall
+        ret
 
         global open:function
 open:
@@ -101,3 +112,49 @@ sleep_failed:
 sleep_quit:
         add     rsp, 32
         ret
+
+
+global setjmp:function
+setjmp:
+    mov     qword [rdi],        rbx
+    mov     qword [rdi+8],      rsp
+    mov     qword [rdi+8*2],    rbp
+    mov     qword [rdi+8*3],    r12
+    mov     qword [rdi+8*4],    r13
+    mov     qword [rdi+8*5],    r14
+    mov     qword [rdi+8*6],    r15
+
+    mov     rax, qword [rsp]
+    mov     qword [rdi+8*7],    rax
+
+    call    sys_rt_sigprocmask
+
+    mov     rsi, 0
+    lea     rdx, [rdi+8*8]
+    mov     rax, 0
+    ret
+
+
+global longjmp:function
+longjmp:
+    mov     rbx, qword [rdi]
+    mov     rsp, qword [rdi+8]
+    mov     rbp, qword [rdi+8*2]
+    mov     r12, qword [rdi+8*3]
+    mov     r13, qword [rdi+8*4]
+    mov     r14, qword [rdi+8*5]
+    mov     r15, qword [rdi+8*6]
+
+    pop     rax
+    mov     rax, qword [rdi+8*7]
+    push    rax
+
+    call    sys_rt_sigprocmask
+
+    push    rsi
+    mov     rdi, 2
+    mov     rcx, 8
+    lea     rsi, [rdi+8*8]
+    mov     rdx, 0
+    pop     rax
+    ret

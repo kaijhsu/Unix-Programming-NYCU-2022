@@ -164,7 +164,13 @@ struct timezone {
 
 /* homework spec: my code */
 // sigset_t
+#define SIG_NSIG (64+1)
+#define SA_RESTORER 0x04000000
+#define SIG_ERR ((sighandler_t) -1)        /* Error return.  */
+#define SIG_DFL ((sighandler_t)  0)        /* Default action.  */
+#define SIG_IGN ((sighandler_t)  1)        /* Ignore signal.  */
 
+void __myrt();
 
 typedef struct {
     unsigned long int val[1];
@@ -189,11 +195,14 @@ struct sigaction {
 
 
 long sys_alarm(unsigned int seconds);
-
+long sys_rt_sigaction(int sig, const struct sigaction *act, struct sigaction *oact, size_t sigsetsize);
+long sys_rt_sigprocmask(int how, const sigset_t *set, sigset_t *oldset, size_t sigsetsize);
+long sys_rt_sigpending(sigset_t *set, size_t sigsetsize);
 
 /* wrappers */
+
 unsigned int alarm(unsigned int seconds);
-int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
+long sigaction(int signum, struct sigaction *act, struct sigaction *oldact);
 int sigismember(const sigset_t *set, int sig);
 int sigaddset (sigset_t *set, int sig);
 int sigdelset (sigset_t *set, int sig);
@@ -201,14 +210,21 @@ int sigemptyset(sigset_t *set);
 int sigfillset(sigset_t *set);
 int sigpending(sigset_t *set);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
-sighandler_t signal(int signum, sighandler_t handler);
+sighandler_t signal(int signo, sighandler_t handler);
 int setjmp(jmp_buf env);
 void longjmp(jmp_buf env, int val);
 
 
 /* useful function without sys call */
 size_t strlen(const char *s);
+unsigned long long sigmask(int signo);
 
+int setjmp(jmp_buf env);
+void longjmp(jmp_buf env, int val);
+
+int _valid_sigset(const sigset_t *set);
+int _valid_signo(const int signo);
+void *memset(void *s, int val, size_t size);
 /* ^^^ --- ---  homework spec: my code --- ---^^^*/
 
 
