@@ -25,3 +25,8 @@ vector<string> split(const string &line, const char delim = '\0'){
     }
     return ret;
 }
+
+void errquit(string message){
+    cerr << "ERROR QUIT: " << message << "\n";
+    exit(-1);
+}
