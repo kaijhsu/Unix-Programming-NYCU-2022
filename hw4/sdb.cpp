@@ -20,8 +20,9 @@ using namespace std;
 int state = NOT_LOADED;
 
 
-pid_t tracee_pid;
-string tracee_program;
+pid_t tracee_pid = 0;
+string tracee_program = "";
+struct user_regs_struct tracee_regs;
 unsigned long long entry_point;
 
 void help() {
@@ -44,43 +45,81 @@ void help() {
     return ;
 }
 
-map<string, unsigned long long> get_regs_map(){
-    struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, tracee_pid, 0, &regs);
+void quit(){
+    if (tracee_pid){
+        kill(tracee_pid, SIGTERM);
+    }
+    exit(0);
+}
 
-    map<string, unsigned long long> regs_map;
-    regs_map["rax"] = regs.rax;
-    regs_map["rbx"] = regs.rbx;
-    regs_map["rcx"] = regs.rcx;
-    regs_map["r8"] = regs.r8;
-    regs_map["r9"] = regs.r9;
-    regs_map["r10"] = regs.r10;
-    regs_map["r11"] = regs.r11;
-    regs_map["r12"] = regs.r12;
-    regs_map["r13"] = regs.r13;
-    regs_map["r14"] = regs.r14;
-    regs_map["r15"] = regs.r15;
-    regs_map["rdi"] = regs.rdi;
-    regs_map["rsi"] = regs.rsi;
-    regs_map["rbp"] = regs.rbp;
-    regs_map["rsp"] = regs.rsp;
-    regs_map["rip"] = regs.rip;
-    regs_map["flags"] = regs.eflags;
+void set(const string &target, const unsigned long long &value){
+    if (state != RUNNING) {
+        cerr << "** State must be RUNNING.\n" << endl;
+        return;
+    }
+    map<string, unsigned long long *> regs_map = get_regs_map();
+    if (regs_map.find(target) == regs_map.end()){
+        cerr << "** No such register.\n";
+        return;
+    }
+    *(regs_map[target]) = value;
+    ptrace(PTRACE_SETREGS, tracee_pid, NULL, &tracee_regs);
+}
+
+void si(){
+    if (state != RUNNING){
+        cerr << "** State must be RUNNING.\n";
+        return;
+    }
+    ptrace(PTRACE_SINGLESTEP, tracee_pid, NULL, NULL);
+}
+
+map<string, unsigned long long *> get_regs_map(){
+    map<string, unsigned long long *> regs_map;
+
+    ptrace(PTRACE_GETREGS, tracee_pid, 0, &tracee_regs);
+    regs_map["rax"] = (unsigned long long *) &tracee_regs.rax;
+    regs_map["rbx"] = (unsigned long long *) &tracee_regs.rbx;
+    regs_map["rcx"] = (unsigned long long *) &tracee_regs.rcx;
+    regs_map["rdx"] = (unsigned long long *) &tracee_regs.rdx;
+    regs_map["r8"] = (unsigned long long *) &tracee_regs.r8;
+    regs_map["r9"] = (unsigned long long *) &tracee_regs.r9;
+    regs_map["r10"] = (unsigned long long *) &tracee_regs.r10;
+    regs_map["r11"] = (unsigned long long *) &tracee_regs.r11;
+    regs_map["r12"] = (unsigned long long *) &tracee_regs.r12;
+    regs_map["r13"] = (unsigned long long *) &tracee_regs.r13;
+    regs_map["r14"] = (unsigned long long *) &tracee_regs.r14;
+    regs_map["r15"] = (unsigned long long *) &tracee_regs.r15;
+    regs_map["rdi"] = (unsigned long long *) &tracee_regs.rdi;
+    regs_map["rsi"] = (unsigned long long *) &tracee_regs.rsi;
+    regs_map["rbp"] = (unsigned long long *) &tracee_regs.rbp;
+    regs_map["rsp"] = (unsigned long long *) &tracee_regs.rsp;
+    regs_map["rip"] = (unsigned long long *) &tracee_regs.rip;
+    regs_map["flags"] = (unsigned long long *) &tracee_regs.eflags;
     
     return regs_map;
 }
 
 void get(const string &target) {
-    map<string, unsigned long long> regs_map = get_regs_map();
+    if (state != RUNNING){
+        cerr << "** State must be RUNNING.\n";
+        return ;
+    }
+
+    map<string, unsigned long long *> regs_map = get_regs_map();
     if (regs_map.find(target) == regs_map.end()){
         cerr << "** No such register.\n";
         return ;
     }
-    cerr << target << " = " << regs_map[target] << " (0x" << hex << regs_map[target] << dec << ")\n";
+    cerr << target << " = " << *(regs_map[target]) << " (0x" << hex << *(regs_map[target]) << dec << ")\n";
 }
 
 void getregs() {
-    map<string, unsigned long long> regs_map = get_regs_map();
+    if (state != RUNNING){
+        cerr << "** State must be RUNNING.\n";
+        return ;
+    }
+    map<string, unsigned long long *> regs_map = get_regs_map();
     vector<string> regs_sequence{"rax", "rbx", "rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
                                 ,"rdi", "rsi", "rbp", "rsp", "rip", "flags"};
 
@@ -90,7 +129,7 @@ void getregs() {
         string key = it;
         for(auto &it : key) it = toupper(it);
         cerr << left << setw(3) << key << " ";
-        cerr << left << setw(24) << hex << regs_map[it] << dec << " ";
+        cerr << left << setw(24) << hex << *regs_map[it] << dec << " ";
         if(endl_cnt % 4 == 0) cerr << endl;
     }
     cerr << right << "\n";
@@ -193,7 +232,7 @@ void parse_input(vector<string> &inputs){
         cout << "dump\n";
     }
     else if (cmd == "exit" or cmd == "q"){
-        cout << "quit\n";
+        quit();
     }
     else if (cmd == "get" or cmd == "g"){
         if(inputs.size() < 2){
@@ -213,7 +252,7 @@ void parse_input(vector<string> &inputs){
     }
     else if (cmd == "load"){
         if (inputs.size() != 2){
-            cerr << "** usage: load {your_program_path}";
+            cerr << "** usage: load <your_program_path>";
             return;
         }
         tracee_program = inputs[1];
@@ -226,10 +265,16 @@ void parse_input(vector<string> &inputs){
         vmmap();
     }
     else if (cmd == "set" or cmd == "s"){
-        cout << "set\n";
+        if (inputs.size() < 3){
+            cerr << "** usage: set <target_register> <ull value>\n";
+            return;
+        }
+        string target = inputs[1];
+        unsigned long long value = strtoull(inputs[2]);
+        set(target, value);
     }
     else if (cmd == "si"){
-        cout << "si\n";
+        si();
     }
     else if (cmd == "start"){
         start();

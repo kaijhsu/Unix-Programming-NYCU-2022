@@ -27,6 +27,12 @@ vector<string> split(const string &line, const char delim = '\0'){
 }
 
 void errquit(string message){
-    cerr << "ERROR QUIT: " << message << "\n";
+    cerr << "** ERROR QUIT: " << message << "\n";
     exit(-1);
+}
+
+unsigned long long strtoull(const string &s){
+    int base = 10;
+    if( s.size() >= 2 and (s.substr(0,2) == "0x" or s.substr(0,2) == "0X") ) base = 16;
+    return stoull(s, NULL, base);
 }

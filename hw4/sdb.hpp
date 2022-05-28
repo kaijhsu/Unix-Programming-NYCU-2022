@@ -10,7 +10,10 @@
 
 using namespace std;
 
-map<string, unsigned long long> get_regs_map();
+map<string, unsigned long long *> get_regs_map();
+void quit();
+void set(const string &target, const unsigned long long &value);
+void si();
 void getregs();
 void get(const string &target);
 void vmmap();
