@@ -10,7 +10,16 @@
 
 using namespace std;
 
+struct breakpoint {
+    unsigned long long address;
+    unsigned char code;
+};
+
 map<string, unsigned long long *> get_regs_map();
+void disasm(unsigned long long target_address);
+unsigned long long disasm_one(unsigned long long target_address);
+void check_status();
+void run();
 void quit();
 void set(const string &target, const unsigned long long &value);
 void si();

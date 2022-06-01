@@ -1,4 +1,6 @@
 #include <iostream>
+#include <stdio.h>
+
 #include <string>
 #include <vector>
 #include <map>
@@ -12,8 +14,11 @@
 #include <sys/user.h>
 #include <sys/stat.h>
 #include <sys/ptrace.h>
+#include <capstone/capstone.h>
+
 #include <sdb.hpp>
 #include <utility.hpp>
+
 
 using namespace std;
 
@@ -24,6 +29,7 @@ pid_t tracee_pid = 0;
 string tracee_program = "";
 struct user_regs_struct tracee_regs;
 unsigned long long entry_point;
+vector<breakpoint> breakpoints;
 
 void help() {
     cerr << "- break {instruction-address}: add a break point\n";
@@ -42,6 +48,131 @@ void help() {
     cerr << "- set reg val: get a single value to a register\n";
     cerr << "- si: step into instruction\n";
     cerr << "- start: start the program and stop at the first instruction\n";
+    return ;
+}
+
+void disasm(unsigned long long target_address){
+    if(state != RUNNING){
+        cerr << "** State must be RUNNING.\n";
+        return;
+    }
+    
+    unsigned long long next_address = target_address;
+    for(int i=0; i<10; ++i){
+        next_address = disasm_one(next_address);
+        if(next_address == 0)
+            return;
+    }
+}
+
+// retrun next opcode address if success, else 0
+unsigned long long disasm_one(unsigned long long target_address){
+
+    csh handle;
+	cs_insn *insn;
+	size_t count;
+    unsigned long long CODE = ptrace(PTRACE_PEEKTEXT, tracee_pid, target_address, 0);
+    unsigned long long next_address = target_address;
+
+    if(CODE == 0xff or CODE == 0){
+        cerr << "** the address is out of the range of the text segment\n";
+        return 0;
+    }
+
+    //  todo:
+    //      restore break point here
+
+	if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK){
+        cerr << "** Capstone error\n";
+        return 0;
+    }
+		
+	count = cs_disasm(handle, (uint8_t *)&CODE, sizeof(CODE)-1, target_address, 1, &insn);
+	if (count > 0) {
+		size_t j;
+		for (j = 0; j < count; j++) {
+            if( int(insn[j].bytes[0]) == 0){
+                cerr << "** the address is out of the range of the text segment\n";
+                return 0;
+            }
+
+			cerr << setw(12) << hex << insn[j].address << ":";
+            for(size_t k=0; k<10; ++k){
+                if( k < insn[j].size)
+                    cerr <<  " " << setw(2) << setfill('0') << int(insn[j].bytes[k]) << setfill(' ');
+                else
+                    cerr << "   ";
+            }
+            cerr << " "  << insn[j].mnemonic << " " << insn[j].op_str << dec << "\n";
+            next_address += insn[j].size;
+        }
+		cs_free(insn, count);
+	} else {
+		printf("** ERROR: Failed to disassemble given address!\n");
+        return 0;
+    }
+	
+    cs_close(&handle);
+
+    return next_address;
+}
+
+void check_status(){
+    int status;
+    waitpid(tracee_pid, &status, 0);
+
+    if (WIFSTOPPED(status)){
+        if (WSTOPSIG(status) != SIGTRAP) {
+            cerr << "** Tracee process " << tracee_pid << " stopped by signal (code " << WSTOPSIG(status) << ")\n";
+            return;
+        }
+
+        map<string, unsigned long long *> regs_map = get_regs_map();
+        unsigned long long *rip = regs_map["rip"];
+        for(auto &it : breakpoints){
+            cerr << "** check_status current rip: " << hex << *rip << " bp address: " << it.address << dec << "\n"; 
+            if( it.address != *rip - 1){
+                continue;
+            }
+
+            // deal with breakpoint
+            cerr << "** breakpoint @      4000b5: bb 01 00 00 00                     mov       ebx, 1";
+            break;
+        }
+    }
+    return;
+}
+
+void set_breakpoint(unsigned long long target_address){
+    if (state != RUNNING){
+        cerr << "** State must be RUNNING\n";
+        return;
+    }
+
+    // check repeated breakpoint
+    for(auto &it : breakpoints){
+        if(it.address == target_address){
+            cerr << "** breakpoint @ " << hex << target_address << dec << " already exist.\n";
+            return;
+        }
+    }
+
+    unsigned char code = ptrace(PTRACE_PEEKTEXT, tracee_pid, target_address, 0);
+    // check target address is valid or not
+    if( code == 0xff ){
+        cerr << "** invalid address: "<< hex << target_address << dec << "\n";
+        return;
+    }
+
+    // add breakpoint into vector
+    breakpoints.push_back({target_address, code});
+
+    if ( 0 != ptrace(PTRACE_POKETEXT, tracee_pid, target_address, (code & 0xffffffffffffff00) | 0xcc) ){
+        errquit("ptrace(POKETEXT)");
+    }
+
+    cerr << "** breakpoint @ " << hex << target_address << " " << hex << int(code) << dec << "\n";
+
     return ;
 }
 
@@ -72,6 +203,8 @@ void si(){
         return;
     }
     ptrace(PTRACE_SINGLESTEP, tracee_pid, NULL, NULL);
+
+    check_status();
 }
 
 map<string, unsigned long long *> get_regs_map(){
@@ -217,7 +350,12 @@ void parse_input(vector<string> &inputs){
     string cmd = inputs[0];
     
     if (cmd == "break" or cmd == "b"){
-        cout << "break\n";
+        if (inputs.size() < 2){
+            cerr << "** usage: break <target_address>\n";
+            return;
+        }
+        auto target_address = strtoull(inputs[1]);
+        set_breakpoint(target_address);
     }
     else if (cmd == "cont" or cmd == "c"){
         cout << "cont\n";
@@ -226,7 +364,12 @@ void parse_input(vector<string> &inputs){
         cout << "delete\n";    
     }  
     else if (cmd == "disasm" or cmd == "d"){
-        cout << "disasm\n";
+        if(inputs.size() < 2){
+            cerr << "** usage: disasm <target_address>\n";
+            return;
+        }
+        auto target_address = strtoull(inputs[1]);
+        disasm(target_address);
     } 
     else if (cmd == "dump" or cmd == "x"){
         cout << "dump\n";
