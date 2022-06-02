@@ -23,13 +23,14 @@
 using namespace std;
 
 int state = NOT_LOADED;
+Breakpoint hit_breakpoint = {0, 0};
 
 
 pid_t tracee_pid = 0;
 string tracee_program = "";
 struct user_regs_struct tracee_regs;
 unsigned long long entry_point;
-vector<breakpoint> breakpoints;
+vector<Breakpoint> breakpoints;
 
 void help() {
     cerr << "- break {instruction-address}: add a break point\n";
@@ -65,22 +66,22 @@ void disasm(unsigned long long target_address){
     }
 }
 
+
+
+
 // retrun next opcode address if success, else 0
 unsigned long long disasm_one(unsigned long long target_address){
-
     csh handle;
 	cs_insn *insn;
 	size_t count;
-    unsigned long long CODE = ptrace(PTRACE_PEEKTEXT, tracee_pid, target_address, 0);
+
+    unsigned long long CODE = peek_original_code(target_address);
     unsigned long long next_address = target_address;
 
     if(CODE == 0xff or CODE == 0){
         cerr << "** the address is out of the range of the text segment\n";
         return 0;
     }
-
-    //  todo:
-    //      restore break point here
 
 	if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK){
         cerr << "** Capstone error\n";
@@ -130,17 +131,100 @@ void check_status(){
         map<string, unsigned long long *> regs_map = get_regs_map();
         unsigned long long *rip = regs_map["rip"];
         for(auto &it : breakpoints){
-            cerr << "** check_status current rip: " << hex << *rip << " bp address: " << it.address << dec << "\n"; 
+            // cerr << "** check_status current rip: " << hex << *rip << " bp address: " << it.address << dec << "\n"; 
             if( it.address != *rip - 1){
                 continue;
             }
 
             // deal with breakpoint
-            cerr << "** breakpoint @      4000b5: bb 01 00 00 00                     mov       ebx, 1";
+            cerr << "** breakpoint @ ";
+            set("rip", *rip-1);
+            disasm_one(it.address);
+            hit_breakpoint = it;
             break;
         }
     }
+
+    if (WIFEXITED(status)) {
+        printf("** Tracee process %d terminiated normally (code %d)\n", tracee_pid, status);
+        // todo: start again implement;
+    }
+
     return;
+}
+
+unsigned long long patch_opcode(unsigned long long code, unsigned long long segement){
+    return (code & 0xffffffffffffff00) | segement;
+}
+
+unsigned long long peek_original_code(unsigned long long address){
+    unsigned long long code = ptrace(PTRACE_PEEKTEXT, tracee_pid, address, 0);
+
+    // check if the address is breakpoint or not
+    for(auto &it: breakpoints){
+        if(it.address == address)
+            return patch_opcode(code, it.code);
+    }
+
+    // retrun normal code
+    return code;
+}
+
+void si_breakpoint(){
+    if(hit_breakpoint.address == 0)
+        errquit("YOU WRITE WRONG CODE. you should check hit_point before si_breakpoint.");
+
+    // bp -> code
+    unsigned long long break_code = ptrace(PTRACE_PEEKTEXT, tracee_pid, hit_breakpoint.address, 0);
+    reset_breakpoint(hit_breakpoint);
+
+    // step one
+    ptrace(PTRACE_SINGLESTEP, tracee_pid, NULL, NULL);
+
+    // code -> bp
+    usleep(100);
+    cerr << "** restore breakpoint address, code: " << hex << hit_breakpoint.address << ", " << break_code << dec << endl;
+    if ( 0 != ptrace(PTRACE_POKETEXT, tracee_pid, hit_breakpoint.address, break_code) ){
+        errquit("ptrace(POKETEXT)");
+    }
+    hit_breakpoint = {0, 0};
+
+    return;
+}
+
+void reset_breakpoint(Breakpoint breakpoint){
+    unsigned long long code = ptrace(PTRACE_PEEKTEXT, tracee_pid, breakpoint.address, 0);
+    code = patch_opcode(code, breakpoint.code);
+    ptrace(PTRACE_POKETEXT, tracee_pid, breakpoint.address, code);
+    return ;
+}
+
+void list(){
+    for(size_t i=0; i<breakpoints.size(); ++i){
+        cerr << setw(4) << right << i << ": " << hex << breakpoints[i].address << dec << left << "\n";
+    }
+    return ;
+}
+
+void delete_breakpoint(int id){
+    if(state != RUNNING){
+        cerr << "** State must be RUNNING.\n";
+        return ;
+    }
+
+    if(size_t(id) >= breakpoints.size() or id < 0){
+        cerr << "** Breakpoint doesn't exist or is invalid.\n";
+        return ;
+    }
+
+    reset_breakpoint(breakpoints[id]);
+
+    if(breakpoints[id].address == hit_breakpoint.address){
+        hit_breakpoint = {0, 0};        
+    }
+
+    cerr << "** Breakpoint " << id << ": @" << hex << breakpoints[id].address << " deleted.\n" << dec; 
+    breakpoints.erase(breakpoints.begin()+id);
 }
 
 void set_breakpoint(unsigned long long target_address){
@@ -157,7 +241,8 @@ void set_breakpoint(unsigned long long target_address){
         }
     }
 
-    unsigned char code = ptrace(PTRACE_PEEKTEXT, tracee_pid, target_address, 0);
+    unsigned long long code = ptrace(PTRACE_PEEKTEXT, tracee_pid, target_address, 0);
+
     // check target address is valid or not
     if( code == 0xff ){
         cerr << "** invalid address: "<< hex << target_address << dec << "\n";
@@ -165,13 +250,15 @@ void set_breakpoint(unsigned long long target_address){
     }
 
     // add breakpoint into vector
-    breakpoints.push_back({target_address, code});
+    unsigned char opcode = code; // store opcode only
+    breakpoints.push_back({target_address, opcode});
 
-    if ( 0 != ptrace(PTRACE_POKETEXT, tracee_pid, target_address, (code & 0xffffffffffffff00) | 0xcc) ){
+    unsigned long long break_code = patch_opcode(code, 0xcc);
+    if ( 0 != ptrace(PTRACE_POKETEXT, tracee_pid, target_address, break_code) ){
         errquit("ptrace(POKETEXT)");
     }
 
-    cerr << "** breakpoint @ " << hex << target_address << " " << hex << int(code) << dec << "\n";
+    cerr << "** breakpoint @ " << hex << target_address << " " << hex << code << " -> " << break_code << dec << "\n";
 
     return ;
 }
@@ -197,12 +284,46 @@ void set(const string &target, const unsigned long long &value){
     ptrace(PTRACE_SETREGS, tracee_pid, NULL, &tracee_regs);
 }
 
+void run(){
+    if (state == NOT_LOADED){
+        cerr << "** State must be RUNNING or LOADED.\n";
+        return;
+    }
+    if (state == RUNNING){
+        cerr << "** State is already RUNNING.\n";
+        cont();
+        return;
+    }
+    if (state == LOADED){
+        start();
+        cont();
+        return;
+    }
+}
+
+void cont(){
+    if (state != RUNNING){
+        cerr << "** State must be RUNNING.\n";
+        return;
+    }
+
+    if (hit_breakpoint.address != 0)
+        si_breakpoint();
+
+    ptrace(PTRACE_CONT, tracee_pid, NULL, NULL);
+    check_status();
+}
+
 void si(){
     if (state != RUNNING){
         cerr << "** State must be RUNNING.\n";
         return;
     }
-    ptrace(PTRACE_SINGLESTEP, tracee_pid, NULL, NULL);
+
+    if (hit_breakpoint.address != 0)
+        si_breakpoint();
+    else
+        ptrace(PTRACE_SINGLESTEP, tracee_pid, NULL, NULL);
 
     check_status();
 }
@@ -262,7 +383,12 @@ void getregs() {
         string key = it;
         for(auto &it : key) it = toupper(it);
         cerr << left << setw(3) << key << " ";
-        cerr << left << setw(24) << hex << *regs_map[it] << dec << " ";
+        if(it == "flags"){
+            cerr << setfill('0') << right << setw(16) << hex << *regs_map[it] << dec << " " << setfill(' ');
+        }
+        else{
+            cerr << left << setw(16) << hex << *regs_map[it] << dec << " ";
+        }
         if(endl_cnt % 4 == 0) cerr << endl;
     }
     cerr << right << "\n";
@@ -289,6 +415,7 @@ void vmmap() {
              << words[2].substr(non_zero) << " ";
         if (words.size() > 5) cerr << words[5] << "\n";
     }
+    cerr << setfill(' ');
     maps_file.close();
     return ;
 }
@@ -344,10 +471,47 @@ void load() {
     return ;
 }
 
+void dump(unsigned long long address){
+    if (state != RUNNING){
+        cerr << "** State must be RUNNING.\n";
+        return;
+    }
+
+    unsigned char bytes[80]; for(int i=0; i<80; ++i) bytes[i] = 0x00;
+
+    int peeksize = 4;
+    for(int i=0; i<80; i+=peeksize){
+        long code = ptrace(PTRACE_PEEKTEXT, tracee_pid, address+i, 0);
+        for(int j=0; j<peeksize; ++j){
+            unsigned char byte = (code & 0xff);
+            bytes[i+j] = byte;
+            code >>= 8; 
+        }
+    }
+
+    for(int i=0; i<80; i+=16){
+        cerr << setw(12) << hex << right << address+i << left << ":";
+        for(int j=0; j<16; ++j){
+            cerr << " " << setw(2) << setfill('0') << int(bytes[i+j]);
+        }
+        cerr << setfill(' ') << " |";
+        for(int j=0; j<16; ++j){
+            char word;
+            if(isprint(bytes[i+j])) word = char(bytes[i+j]);
+            else word = '.';
+            cerr << word;
+        }
+        cerr << "|\n";
+    }
+
+    return ;
+}
+
 void parse_input(vector<string> &inputs){
     if (inputs.size() < 1) return ;
     
     string cmd = inputs[0];
+    cerr << "** cmd: " << cmd << endl;
     
     if (cmd == "break" or cmd == "b"){
         if (inputs.size() < 2){
@@ -358,21 +522,31 @@ void parse_input(vector<string> &inputs){
         set_breakpoint(target_address);
     }
     else if (cmd == "cont" or cmd == "c"){
-        cout << "cont\n";
+        cont();
     }
     else if (cmd == "delete"){
-        cout << "delete\n";    
+        if(inputs.size() < 2){
+            cerr << "** usage: delete <breakpoint_id>\n";
+            return;
+        }  
+        int id = stoi(inputs[1]);
+        delete_breakpoint(id);
     }  
     else if (cmd == "disasm" or cmd == "d"){
         if(inputs.size() < 2){
-            cerr << "** usage: disasm <target_address>\n";
             return;
+            cerr << "** usage: disasm <target_address>\n";
         }
         auto target_address = strtoull(inputs[1]);
         disasm(target_address);
     } 
     else if (cmd == "dump" or cmd == "x"){
-        cout << "dump\n";
+        if(inputs.size() < 2){
+            cerr << "** usage: dump <address>\n";
+            return;
+        }
+        unsigned long long address = strtoull(inputs[1]);
+        dump(address);
     }
     else if (cmd == "exit" or cmd == "q"){
         quit();
@@ -391,7 +565,7 @@ void parse_input(vector<string> &inputs){
         help();
     }
     else if (cmd == "list" or cmd == "l"){
-        cout << "list\n";
+        list();
     }
     else if (cmd == "load"){
         if (inputs.size() != 2){
@@ -402,7 +576,7 @@ void parse_input(vector<string> &inputs){
         load();
     }
     else if (cmd == "run" or cmd == "r"){
-        cout << "run\n";
+        run();
     }
     else if (cmd == "vmmap" or cmd == "m"){
         vmmap();
@@ -423,23 +597,51 @@ void parse_input(vector<string> &inputs){
         start();
     }
     else {
-        cout << "unknown cmd\n";
+        cerr << "** Unknown cmd\n";
     }
 }
 
 int main(int argc, char *argv[]){
+    string script_path = "";
 
-    if (argc > 1) {
-        tracee_program = argv[1];
-        load(); 
+    if (argc >= 2){
+        for(int i=1; i<argc; ++i){
+            string arg = argv[i];
+            if(arg == "-s"){
+                if(i+1 >= argc){
+                    errquit("Script argumet error!");
+                }
+                script_path = argv[i+1];
+                i++;
+            } else {
+                if(tracee_program == "")
+                    tracee_program = argv[i];
+            }
+        }
+        if(tracee_program != "")
+            load();
     }
 
-    while (true) {
-        cerr << "sdb> ";
+    if(script_path != ""){
+        fstream file;
+        file.open(script_path, ios::in);
+        if(!file){
+            cerr << "** Can't open script file.\n";
+            return -1;
+        }
         string line;
-        getline(cin, line);
-        vector<string> inputs = split(line);
-        parse_input(inputs);
+        while (getline(file, line)){
+            vector<string> inputs = split(line);
+            parse_input(inputs);
+        }
+    } else {
+        while (true) {
+            cerr << "sdb> ";
+            string line;
+            getline(cin, line);
+            vector<string> inputs = split(line);
+            parse_input(inputs);
+        }
     }
     return 0;
 }
